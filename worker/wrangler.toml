@@ -1,16 +1,16 @@
-name = "cfmgr"
+name = "cfmgrn"
 compatibility_date = "2024-12-01"
 main = "src/index.ts"
 pages_build_output_dir = "public"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "cfmgr"
-database_id = "4aada139-54fb-4725-9789-031500f31b0c"
+database_name = "cfmgrn"
+database_id = "e9626b9b-d4ff-43d6-af4e-7f108fcc5d64"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "65a21fab872646cc91b0772a6af521f4"
+id = "d5cc75e982c94f879b0a32d9718fbcaa"
 
 [vars]
 API_SECRET = ""
