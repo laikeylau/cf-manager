@@ -315,6 +315,7 @@ app.post('/deploy', async (c) => {
   const template = await findTemplate(c, templateId);
   if (!template) return c.json({ error: { code: 'NOT_FOUND', message: 'Template not found' } }, 404);
 
+  console.log(`[Store] deploy: deploying for account ${account.name} (DB id=${account.id}, CF=${account.account_id})`);
   const result = await deployTemplate({
     account, encryptionKey: c.env.ENCRYPTION_KEY, template, name,
     bindingSelections: bindingSelections || {}, secretValues: secretValues || {},
@@ -337,6 +338,63 @@ app.post('/deploy', async (c) => {
       },
     }, 500);
   }
+});
+
+// ============ Batch Deploy (多账户批量部署) ============
+
+app.post('/deploy-batch', async (c) => {
+  const body = await c.req.json();
+  const { deployments } = body;
+
+  if (!Array.isArray(deployments) || deployments.length === 0) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'deployments must be a non-empty array' } }, 400);
+  }
+
+  const firstDeployment = deployments[0];
+  const template = await findTemplate(c, firstDeployment.templateId);
+  if (!template) return c.json({ error: { code: 'NOT_FOUND', message: 'Template not found' } }, 404);
+
+  const results = await Promise.all(deployments.map(async (d: any) => {
+    try {
+      const account = await getAccountById(c.env.DB, d.accountId);
+      if (!account) return { accountId: d.accountId, name: d.name, success: false, error: 'Account not found' };
+
+      // Preflight
+      const pfResult = await preflightDeploy({
+        account, encryptionKey: c.env.ENCRYPTION_KEY, template, name: d.name,
+        bindingSelections: d.bindingSelections || {},
+        secretValues: d.secretValues || {},
+        deployType: d.deployType || undefined,
+      });
+
+      if (!pfResult.canProceed) {
+        const pfErrors = pfResult.warnings?.join('; ') || '预检未通过';
+        return { accountId: d.accountId, name: d.name, success: false, error: pfErrors };
+      }
+
+      // Deploy
+      console.log(`[Store] deploy-batch: deploying for account ${account.name} (DB id=${account.id}, CF=${account.account_id})`);
+      const result = await deployTemplate({
+        account, encryptionKey: c.env.ENCRYPTION_KEY, template, name: d.name,
+        bindingSelections: d.bindingSelections || {}, secretValues: d.secretValues || {},
+        deployType: d.deployType || undefined,
+        traces: d.traces !== false, logs: d.logs !== false,
+        db: c.env.DB,
+      });
+
+      return {
+        accountId: d.accountId, accountName: account.name, cfAccountId: account.account_id,
+        name: d.name,
+        success: result.success,
+        error: result.success ? undefined : (result.error || '部署失败'),
+        warnings: result.warnings,
+      };
+    } catch (e: any) {
+      return { accountId: d.accountId, name: d.name, success: false, error: e.message };
+    }
+  }));
+
+  return c.json(results, 200);
 });
 
 export default app;

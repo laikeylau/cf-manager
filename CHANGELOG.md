@@ -1,5 +1,65 @@
 # Changelog
 
+## [1.5.1] - 2026-08-05
+
+### 🐛 Bug 修复
+
+- **修复批量操作栏位置不明显**：将账户管理页的批量操作按钮（批量设置功能/代理/删除）整合到筛选行中，与"批量测试"按钮同一行显示，仅在勾选账户后通过竖线分隔符追加渲染，省去独立行的视觉冗余。
+- **部署工作流新增演示模式开关**：`deploy-cf.yml` 和 `deploy-cf-secret.yml` 新增 `demo_mode` 输入参数（默认 `true`）。开启时根据部署邮箱（`CLOUDFLARE_EMAIL`）在 D1 中查询并保护对应的部署账户（既不保护全部账户，也不限于 full_wipe），无论是否为完全覆盖模式；关闭时不设置任何演示保护。
+
+## [1.5.0] - 2026-08-04
+
+### 🚀 新特性
+
+- **Resin 代理池集成**：原生支持 [Resin](https://github.com/Resinat/Resin) 代理池网关，实现每账户 sticky IP 绑定。设置页新增「Resin 代理池」卡片，配置 Resin 服务地址、Token 和 Platform 后，系统自动为每个 CF 账户构建 `http://Platform.{accountId}:Token@resin-host:port` 格式的代理 URL，通过 Resin 的 sticky session 机制将每个账户绑定到稳定出口 IP，避免 Cloudflare 因 IP 频繁变动触发风控。
+- **代理优先级链**：账户专属代理(已启用) > Resin(已启用) > 全局代理(已启用) > 无代理。账户专属代理可覆盖 Resin，允许个别账户不走代理池。
+- **Docker 合并为单容器（All-in-One）**：将原来的双容器架构（Nginx 前端 + Node.js 后端）合并为单一 Node.js 容器。Express 直接通过 `express.static` + `compression` 中间件提供前端静态文件服务（gzip 压缩、30 天缓存、SPA 路由回退），不再依赖 Nginx。SSE 流式响应在 Node.js 中原生处理，无需 `proxy_buffering off` 等配置。
+- **预构建 Docker 镜像发布到 GHCR**：新增 `docker-publish.yml` GitHub Actions workflow，在 Release 打 tag 时自动构建多架构（amd64 + arm64）镜像并推送到 `ghcr.io/hefy2027/cf-manager`。用户无需 clone 仓库，直接 `docker pull` 即可使用。
+
+### 🐛 Bug 修复
+
+- **修复 Worker 端批量部署缺少 `db` 参数**：`POST /store/deploy-batch` 调用 `deployTemplate` 时补充 `db: c.env.DB`，确保批量部署路径下审计日志正常写入（与单次部署路由 `POST /store/deploy` 行为一致）。
+- **修复部署 Modal 账户预选不一致**：单次部署弹窗默认预选账户从分页的 `accountStore.accounts[0]` 改为全量 `accountOptions[0]`（与下拉选项数据源一致），避免分页翻页后预选到非预期的账户导致用户误部署到错误账户。
+- **修复 Settings 任务表单账户下拉选项不全**：定时任务表单的账户下拉选项从分页的 `accountStore.accounts` 改为独立全量加载（`pageSize: 10000`），确保所有活跃账户在任务创建时可被选择。
+- **修复部署按钮可能被错误禁用**：Workers 页面的「部署」按钮启用条件从分页的 `accountStore.accounts.length` 改为全量的 `allAccounts.length`，避免账户分页翻页后按钮被误禁用。
+
+### 🔧 优化
+
+- `proxyFetch` 新增 `account` 参数，支持自动使用 Resin/账户代理（pagesDeploy / workerDeploy / assetsUpload / preflight 调用已适配）。
+- `getAccountProxyUrl` 修正账户专属代理需 `proxy_enabled === 1` 才生效（与 `getHttpAgentForAccount` 行为一致）。
+- `proxyFetch` 重试逻辑（ECONNRESET/EPIPE）补充 `account` 分支，修复重试时丢失 Resin/账户代理的 bug。
+- **部署路由增加账户日志**：在 backend 和 worker 的 `/store/deploy` 与 `/store/deploy-batch` 路由中添加部署账户信息日志（账户名、DB id、CF account_id），方便定位多账户部署时可能出现的账户选择问题。
+- **部署结果包含账户信息**：`DeployResult` 接口新增 `accountName` / `accountId` 字段，前端成功弹窗展示部署目标账户名，用户可直观确认部署到了正确的账户。
+- **Docker 部署简化**：`docker-compose.yml` 简化为单服务配置；`deploy.sh` 适配单容器构建流程。
+- **移除 `BASE_URL` 环境变量**：Docker 版前端路径固定为 `/`，不再支持自定义子路径（Worker 版仍固定 `/admin/`）。
+- **`.dockerignore` 更新**：适配新的 `docker/Dockerfile` 路径。
+
+### 🗑️ 移除
+
+- 删除 `docker/backend/Dockerfile`、`docker/frontend/` 目录（Dockerfile、nginx.conf、nginx.conf.template、entrypoint.sh）。
+
+## [1.4.3] - 2026-08-03
+
+### 🚀 新特性
+
+- **Workers/Pages 批量部署支持任意账户**：批量部署弹窗从"只能从已部署列表中勾选"改为"多选目标账户 + 输入名称"的模式，与单账户部署一致，可在任意账户上新建部署，不再依赖 `workerStore.workers` 数据源。
+- **Store 商店多账户批量部署**：部署对话框支持多选账户（`n-select multiple`），一键将同个模板部署到多个账户。多账户模式下绑定资源强制使用 auto 模式（每账户独立创建或按名称复用），避免跨账户资源 ID 冲突。后端新增 `POST /store/deploy-batch` 批量端点（backend + worker 对称），单次请求并行完成预检 + 部署，返回每个账户的独立结果。
+
+### 🐛 Bug 修复
+
+- **Pages 部署配置格式与文件上传逻辑**：修复 Pages 部署时配置参数格式不正确及文件上传处理逻辑的问题。
+
+### 🔧 优化
+
+- 批量部署按钮禁用条件改为检查 `allAccounts` 而非 `workerStore.workers`，打开弹窗时不需要先选中某个账户卡片。
+
+## [1.4.2] - 2026-08-01
+
+### 🐛 Bug 修复
+
+- **AI 推理页用量统计 404**：`/api/ai/usage` 接口在 Worker（Cloudflare Pages）端缺失，前端 fetch 收到 nginx 伪装 HTML 页面，解析 JSON 抛出 `SyntaxError: Unexpected token '<'`。补齐 Worker 端 `routes/ai.ts` 的 `GET /usage` 实现并挂载到 `/api/ai`，与 backend 对称。
+- **移动端暗黑模式切换缺失**：修复三个关联问题：1) `main.ts` 未导入 `style.css`，导致所有自定义 CSS 变量（`--app-bg`、`--app-bg-card` 等）从未加载，移动端布局、紧凑账户卡片、AI 建议卡等全部失效；2) `toggleTheme` 未调用 `setDiscreteTheme`，导致 message/notification/dialog 等离散组件不跟随主题；3) 主题状态未持久化（刷新后回退亮色）且未检测系统 `prefers-color-scheme`。现补齐 `style.css` 导入、`toggleTheme` 同步 `html.app-dark` class + localStorage 持久化 + `setDiscreteTheme` 调用、启动时从 localStorage/系统偏好恢复主题。
+
 ## [1.4.1] - 2026-07-27
 
 ### 🚀 新特性

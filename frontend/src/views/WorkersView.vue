@@ -3,8 +3,8 @@
     <n-space justify="space-between" align="center" :wrap="true">
       <n-h2 style="margin: 0">Workers & Pages 管理</n-h2>
       <n-space>
-        <n-button size="small" @click="openBatchDeploy" :disabled="!workerStore.workers.length">批量部署</n-button>
-        <n-button size="small" type="primary" @click="openDeploy()" :disabled="!accountStore.accounts.length">部署</n-button>
+        <n-button size="small" @click="openBatchDeploy" :disabled="!allAccounts.length">批量部署</n-button>
+        <n-button size="small" type="primary" @click="openDeploy()" :disabled="!allAccounts.length">部署</n-button>
       </n-space>
     </n-space>
 
@@ -103,7 +103,7 @@
             <n-upload :max="1" :default-upload="false" @change="handleAssetsChange" accept=".zip">
               <n-button>选择 .zip（可选）</n-button>
             </n-upload>
-            <span v-if="selectedAssetsFile" style="margin-left: 8px; font-size: 12px; color: #999">{{ selectedAssetsFile.name }}</span>
+            <span v-if="selectedAssetsFile" style="margin-left: 8px; font-size: 12px; color: var(--app-text-disabled)">{{ selectedAssetsFile.name }}</span>
           </n-form-item>
           <n-form-item v-else label="JS URL">
             <n-input v-model:value="deployUrl" placeholder="https://example.com/worker.js" />
@@ -113,7 +113,7 @@
           <n-upload :max="1" :default-upload="false" @change="handleZipChange" accept=".zip">
             <n-button>选择 .zip 文件</n-button>
           </n-upload>
-          <span v-if="selectedZipFile" style="margin-left: 8px; font-size: 12px; color: #999">{{ selectedZipFile.name }}</span>
+          <span v-if="selectedZipFile" style="margin-left: 8px; font-size: 12px; color: var(--app-text-disabled)">{{ selectedZipFile.name }}</span>
           <n-text v-else-if="!isRedeploy" depth="3" style="margin-left: 8px; font-size: 12px">不选则创建空项目</n-text>
         </n-form-item>
       </n-form>
@@ -153,15 +153,11 @@
             <n-radio value="pages">Pages</n-radio>
           </n-radio-group>
         </n-form-item>
-        <n-form-item :label="batchType === 'worker' ? '目标 Workers' : '目标 Pages'">
-          <n-checkbox-group v-model:value="batchTargets">
-            <n-space vertical>
-              <n-checkbox v-for="w in workerStore.workers.filter((w: any) => w.type === batchType)" :key="`${w.cfAccountId}-${w.name}`" :value="`${w.cfAccountId}:${w.name}`">
-                {{ w.accountName }} / {{ w.name }}
-              </n-checkbox>
-              <n-text v-if="!workerStore.workers.filter((w: any) => w.type === batchType).length" depth="3">暂无可用的 {{ batchType === 'worker' ? 'Worker' : 'Pages' }}</n-text>
-            </n-space>
-          </n-checkbox-group>
+        <n-form-item label="目标账户">
+          <n-select v-model:value="batchTargets" :options="batchAccountOptions" multiple placeholder="选择目标账户" />
+        </n-form-item>
+        <n-form-item :label="batchType === 'worker' ? 'Worker 名称' : 'Pages 名称'">
+          <n-input v-model:value="batchName" :placeholder="batchType === 'worker' ? '将在所有选中账户上部署同名 Worker' : '将在所有选中账户上创建同名 Pages 项目'" />
         </n-form-item>
         <template v-if="batchType === 'worker'">
           <n-form-item label="脚本来源">
@@ -196,7 +192,7 @@
       </div>
       <template #action>
         <n-button @click="showBatchDeployModal = false">关闭</n-button>
-        <n-button type="primary" :loading="batchDeploying" @click="handleBatchDeploy" :disabled="!batchTargets.length">部署</n-button>
+        <n-button type="primary" :loading="batchDeploying" @click="handleBatchDeploy" :disabled="!batchTargets.length || !batchName.trim()">部署</n-button>
       </template>
     </n-modal>
 
@@ -298,7 +294,7 @@ function openDeploy(type?: 'worker' | 'pages', prefillName?: string, prefillAcco
   deployMainModule.value = '';
   isRedeploy.value = !!prefillName;
   deployForm.value = {
-    accountId: prefillAccountId || accountStore.accounts[0]?.id || null,
+    accountId: prefillAccountId || accountOptions.value[0]?.value || null,
     name: prefillName || '',
   };
   showDeployModal.value = true;
@@ -394,7 +390,8 @@ const columns = computed<DataTableColumns<any>>(() => {
 // ============ Batch Deploy ============
 const showBatchDeployModal = ref(false);
 const batchType = ref<'worker' | 'pages'>('worker');
-const batchTargets = ref<string[]>([]);
+const batchTargets = ref<number[]>([]);
+const batchName = ref('');
 const batchSource = ref<'file' | 'url'>('file');
 const batchFile = ref<File | null>(null);
 const batchAssetsFile = ref<File | null>(null);
@@ -403,9 +400,17 @@ const batchMainModule = ref('');
 const batchDeploying = ref(false);
 const batchResults = ref<any[]>([]);
 
+// 批量部署可选账户（所有启用 workers 功能的活跃账户）
+const batchAccountOptions = computed(() =>
+  allAccounts.value
+    .filter((a: any) => a.is_active && (a.enabled_features || 'ai,workers,browser_render,dns,storage').includes('workers'))
+    .map((a: any) => ({ label: `${a.name} (${a.email || a.id})`, value: a.id }))
+);
+
 function openBatchDeploy() {
-  batchType.value = workerStore.workers.some((w: any) => w.type === 'worker') ? 'worker' : 'pages';
+  batchType.value = 'worker';
   batchTargets.value = [];
+  batchName.value = '';
   batchFile.value = null;
   batchAssetsFile.value = null;
   batchUrl.value = '';
@@ -415,10 +420,11 @@ function openBatchDeploy() {
 }
 
 async function handleBatchDeploy() {
-  const targets = batchTargets.value.map(t => {
-    const [accountId, workerName] = t.split(':');
-    return { accountId: Number(accountId), workerName };
-  });
+  if (!batchName.value.trim()) { message.warning('请输入部署名称'); return; }
+  const targets = batchTargets.value.map(accountId => ({
+    accountId,
+    workerName: batchName.value.trim(),
+  }));
   batchDeploying.value = true;
   try {
     if (batchType.value === 'worker') {
@@ -458,23 +464,27 @@ onMounted(async () => {
   min-width: 0;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid #e0e0e6;
+  border: 1px solid var(--app-border);
   border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.2s;
-  background-color: #fff;
+  background-color: var(--app-bg-card);
   box-sizing: border-box;
 }
-.worker-compact-card:hover { background-color: #f5f5f5; }
+.worker-compact-card:hover { background-color: var(--app-bg-hover); }
 .worker-compact-card__count {
   font-size: 10px;
-  color: #999;
+  color: var(--app-text-disabled);
   font-weight: 500;
   flex-shrink: 0;
   white-space: nowrap;
 }
 .worker-compact-card--active {
   background-color: #e8f0fe;
+  border-color: #4098fc;
+}
+html.app-dark .worker-compact-card--active {
+  background-color: rgba(64, 152, 252, 0.15);
   border-color: #4098fc;
 }
 .worker-compact-card__name {
@@ -487,7 +497,7 @@ onMounted(async () => {
 }
 .worker-compact-card__metric {
   font-size: 11px;
-  color: #333;
+  color: var(--app-text-primary);
   font-weight: 500;
   flex-shrink: 0;
   white-space: nowrap;
