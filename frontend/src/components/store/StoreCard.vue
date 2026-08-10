@@ -13,7 +13,7 @@
         text
         size="small"
         @click.stop="emit('toggle-fav', item)"
-        :title="faved ? '取消收藏' : '收藏'"
+        :title="faved ? t('storeCard.unfav') : t('storeCard.fav')"
       >
         <n-icon
           :component="faved ? Star : StarOutline"
@@ -23,7 +23,7 @@
       </n-button>
     </template>
 
-    <p class="tpl-desc">{{ item.template.description || '暂无描述' }}</p>
+    <p class="tpl-desc">{{ item.template.description || t('storeCard.noDesc') }}</p>
 
     <n-space v-if="bindingTypes.length" class="binding-row" size="small">
       <n-tag
@@ -48,7 +48,7 @@
           <template v-if="item.template.author?.url">
             <a :href="item.template.author.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ item.template.author.name }}</a>
           </template>
-          <template v-else>by {{ item.template.author?.name || 'unknown' }}</template>
+          <template v-else>{{ t('storeCard.by', { name: item.template.author?.name || t('storeCard.unknown') }) }}</template>
           <n-tag size="tiny" round class="ver-tag">{{ item.template.version }}</n-tag>
         </span>
         <n-space :size="6">
@@ -59,9 +59,9 @@
             @click.stop="openRepo"
           >
             <template #icon><n-icon :component="LogoGithub" /></template>
-            仓库
+            {{ t('storeCard.repo') }}
           </n-button>
-          <n-button size="tiny" type="primary" @click.stop="emit('deploy', item)">部署</n-button>
+          <n-button size="tiny" type="primary" @click.stop="emit('deploy', item)">{{ t('storeCard.deploy') }}</n-button>
         </n-space>
       </n-space>
     </template>
@@ -70,10 +70,13 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { Star, StarOutline } from '@vicons/ionicons5';
 import { LogoGithub } from '@vicons/ionicons5';
 import type { CatalogBindingType, TemplateItem } from '../../types/store';
 import { isFav } from '../../utils/favorites';
+
+const { t } = useI18n();
 
 const props = defineProps<{ item: TemplateItem }>();
 const emit = defineEmits<{
@@ -84,11 +87,14 @@ const emit = defineEmits<{
 
 const faved = computed(() => isFav(props.item));
 
+// 仓库地址：优先用模板的 homepage（真正的项目仓库），
+// 再退化到 source.url（raw 源文件地址，从中能反推 GitHub 仓库），
+// 最后才到 author.url（仅是作者个人主页，不一定是仓库本身）。
 const repoUrl = computed(() => {
   return (
-    props.item.template.author?.url ||
     props.item.template.homepage ||
     props.item.template.source?.url ||
+    props.item.template.author?.url ||
     ''
   );
 });
