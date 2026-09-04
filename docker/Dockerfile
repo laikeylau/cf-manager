@@ -61,12 +61,21 @@ COPY --from=frontend-builder /app/dist ./public
 
 RUN mkdir -p /app/data
 
+# su-exec：以 root 启动 entrypoint（修复 ./data 宿主属主），再 drop 到 node 启动 node 进程。
+# 避免宿主挂载目录属主不是 1000:1000 时 better-sqlite3 EACCES 导致容器秒退。
+RUN apk add --no-cache su-exec
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 ENV PORT=3000
 ENV DB_PATH=/app/data/cf-manager.db
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/health || exit 1
+    CMD wget -qO- http://localhost:3000/api/health || exit 1
+
+# entrypoint.sh 会以 root 启动并 chown /app/data，再用 su-exec drop 到 node 启动进程。
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 CMD ["node", "dist/index.js"]

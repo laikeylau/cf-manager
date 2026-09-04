@@ -1,9 +1,11 @@
 name: CI
 
-# 自动 CI 检查：针对 master 的 PR 自动触发，编译校验三部分代码，
+# 自动 CI 检查：针对 master 的 PR 自动触发，编译/类型检查/单元测试校验三部分代码，
 # 任一失败则该 PR 的状态检查变红，配合分支规则集（protect-master）阻止合并。
 # 三个 job 的 status check context 分别为：build-backend / build-frontend / build-worker
 on:
+  push:
+    branches: [master]
   pull_request:
     branches: [master]
 
@@ -18,12 +20,32 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      # 直接缓存 node_modules：better-sqlite3 是原生模块，~/.npm 缓存命中后 npm ci 仍要
+      # 重新解压并下载/编译原生二进制，波动大。命中 node_modules 后直接跳过 npm ci。
+      - name: Cache backend node_modules
+        id: cache-backend
+        uses: actions/cache@v5
+        with:
+          path: backend/node_modules
+          key: backend-node-${{ hashFiles('backend/package-lock.json') }}
       - name: Install backend dependencies
+        if: steps.cache-backend.outputs.cache-hit != 'true'
         working-directory: backend
-        run: npm install
+        run: npm ci
       - name: Build backend
         working-directory: backend
         run: npm run build
+      - name: Typecheck backend
+        working-directory: backend
+        run: npm run typecheck
+      - name: Lint backend
+        working-directory: backend
+        run: npm run lint
+      - name: Test backend
+        working-directory: backend
+        run: npm run test
 
   build-frontend:
     runs-on: ubuntu-latest
@@ -32,12 +54,27 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Cache frontend node_modules
+        id: cache-frontend
+        uses: actions/cache@v5
+        with:
+          path: frontend/node_modules
+          key: frontend-node-${{ hashFiles('frontend/package-lock.json') }}
       - name: Install frontend dependencies
+        if: steps.cache-frontend.outputs.cache-hit != 'true'
         working-directory: frontend
-        run: npm install
+        run: npm ci
       - name: Build frontend
         working-directory: frontend
-        run: npm run build
+        run: npx vite build
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
 
   build-worker:
     runs-on: ubuntu-latest
@@ -46,9 +83,47 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - name: Cache worker node_modules
+        id: cache-worker
+        uses: actions/cache@v5
+        with:
+          path: worker/node_modules
+          key: worker-node-${{ hashFiles('worker/package-lock.json') }}
       - name: Install worker dependencies
+        if: steps.cache-worker.outputs.cache-hit != 'true'
         working-directory: worker
-        run: npm install
-      - name: Build worker (includes frontend + shared sync)
+        run: npm ci --omit=optional
+      # 生成被 .gitignore 的构建期文件（version.ts / shared 数据 / catalog 校验器），
+      # 供 typecheck 与 esbuild 使用。不再调用 build.js —— 它会在 CI 里重复安装并构建
+      # 整个 frontend（frontend 已由 build-frontend job 独立校验），重复导致 14 分钟级延迟。
+      - name: Prepare generated files (version + shared sync)
         working-directory: worker
-        run: npm run build
+        run: |
+          node ../scripts/gen-version.js worker
+          node ../scripts/sync-shared.js
+      - name: Build worker (esbuild bundle only)
+        working-directory: worker
+        run: |
+          mkdir -p public
+          npm run build:worker
+      - name: Typecheck worker
+        working-directory: worker
+        run: npm run typecheck
+      - name: Lint worker
+        working-directory: worker
+        run: npm run lint
+      - name: Test worker
+        working-directory: worker
+        run: npm run test
+
+  schema-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Verify backend/worker DB schema alignment
+        run: node scripts/check-db-schema.mjs
